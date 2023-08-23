@@ -249,7 +249,8 @@ const httpServer = http.createServer((req,resp) => {
 
 	else if ( req.method == "POST" ){
 
-    const clientIp = (req) => req.headers['x-forwarded-for']?.split(',').shift() || req.socket?.remoteAddress
+		let clientIp = req.headers['x-forwarded-for']?.split(',').shift() || req.socket?.remoteAddress
+		clientIp = clientIp.split(":").pop();
 
 		let chunks = [];
 	
@@ -284,3 +285,6 @@ httpServer.listen(BAMBUBRIDGE_HTTP_PORT, () => {
 	console.log(`http listening on port ${BAMBUBRIDGE_HTTP_PORT}`);
 });
 
+process.on("SIGTERM", () => {
+	process.exit(0);
+});

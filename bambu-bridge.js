@@ -187,7 +187,7 @@ bambuClient.on("connect", () => {
 // a forked and patched version of BambuStudio -> slynn1324/BambuStudio
 // ###############################################################################################################
 let inactiveTimer; 
-function processMessage(message, devId){
+function processMessage(message, devId, clientIp){
 
   if ( devId == BAMBUBRIDGE_PRINTER_SN ){
     let obj = JSON.parse(message.toString());
@@ -220,6 +220,7 @@ function processMessage(message, devId){
 
         mqttClient.publish(`${BAMBUBRIDGE_MQTT_PREFIX}/${BAMBUBRIDGE_PRINTER_SN}/studio_status`, "online", {retain: true});
         mqttClient.publish(`${BAMBUBRIDGE_MQTT_PREFIX}/${BAMBUBRIDGE_PRINTER_SN}/last_update`, new Date().toISOString(), {retain: true});
+        mqttClient.publish(`${BAMBUBRIDGE_MQTT_PREFIX}/${BAMBUBRIDGE_PRINTER_SN}/last_update_ip`, clientIp, {retain: true});
         
         // setup a timer to report the studio is offline if we don't get a message for 10s.
         clearTimeout(inactiveTimer);
@@ -247,6 +248,9 @@ const httpServer = http.createServer((req,resp) => {
 	}	
 
 	else if ( req.method == "POST" ){
+
+    const clientIp = (req) => req.headers['x-forwarded-for']?.split(',').shift() || req.socket?.remoteAddress
+
 		let chunks = [];
 	
 		req.on("data", chunk => {
@@ -264,7 +268,7 @@ const httpServer = http.createServer((req,resp) => {
         if ( BAMBUBRIDGE_VERBOSE ){
 				  console.log(body);
         }
-				processMessage(body, devId);
+				processMessage(body, devId, clientIp);
 				resp.end("ok");
 			} catch (e) {
 				console.log("ERROR - invalid JSON: ", body);

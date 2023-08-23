@@ -87,8 +87,8 @@ const mqttClient = mqtt.connect(`mqtt://${BAMBUBRIDGE_MQTT_HOST}:${BAMBUBRIDGE_M
   username: BAMBUBRIDGE_MQTT_USERNAME,
   password: BAMBUBRIDGE_MQTT_PASSWORD,
   will: {
-    topic: `${BAMBUBRIDGE_MQTT_PREFIX}/online`,
-    payload: "false",
+    topic: `${BAMBUBRIDGE_MQTT_PREFIX}/status`,
+    payload: "offline",
     retain: true
   }
 });
@@ -103,8 +103,8 @@ mqttClient.on("disconnect", (err) => {
 
 mqttClient.on("connect", (err) => {
   console.log("[mqtt] connect");
-  mqttClient.publish(`${BAMBUBRIDGE_MQTT_PREFIX}/online`, "true", { retain: true });
-  mqttClient.publish(`${BAMBUBRIDGE_MQTT_PREFIX}/${BAMBUBRIDGE_PRINTER_SN}/studio_online`, "false", {retain: true});
+  mqttClient.publish(`${BAMBUBRIDGE_MQTT_PREFIX}/status`, "online", { retain: true });
+  mqttClient.publish(`${BAMBUBRIDGE_MQTT_PREFIX}/${BAMBUBRIDGE_PRINTER_SN}/studio_status`, "offline", {retain: true});
   mqttClient.subscribe(`${BAMBUBRIDGE_MQTT_PREFIX}/${BAMBUBRIDGE_PRINTER_SN}/command`);
 });
 
@@ -148,17 +148,17 @@ const bambuClient = mqtt.connect(`mqtts://${BAMBUBRIDGE_PRINTER_HOST}:8883`,{
 // reflect bambu connection status on a broker topic
 bambuClient.on("error", (err) => {
   console.log("[bambu] error", err);
-  mqttClient.publish(`${BAMBUBRIDGE_MQTT_PREFIX}/${BAMBUBRIDGE_PRINTER_SN}/printer_online`, "false", {retain: true});
+  mqttClient.publish(`${BAMBUBRIDGE_MQTT_PREFIX}/${BAMBUBRIDGE_PRINTER_SN}/printer_status`, "offline", {retain: true});
 });
 
 bambuClient.on("disconnect", () => {
   console.log("[bambu] disconnect");
-  mqttClient.publish(`${BAMBUBRIDGE_MQTT_PREFIX}/${BAMBUBRIDGE_PRINTER_SN}/printer_online`, "false", {retain: true});
+  mqttClient.publish(`${BAMBUBRIDGE_MQTT_PREFIX}/${BAMBUBRIDGE_PRINTER_SN}/printer_status`, "offline", {retain: true});
 });
 
 bambuClient.on("offline", () => {
   console.log("[bambu] offline");
-  mqttClient.publish(`${BAMBUBRIDGE_MQTT_PREFIX}/${BAMBUBRIDGE_PRINTER_SN}/printer_online`, "false", {retain: true});
+  mqttClient.publish(`${BAMBUBRIDGE_MQTT_PREFIX}/${BAMBUBRIDGE_PRINTER_SN}/printer_status`, "offline", {retain: true});
 });
 
 bambuClient.on("reconnect", () => {
@@ -167,7 +167,7 @@ bambuClient.on("reconnect", () => {
 
 bambuClient.on("connect", () => {
   console.log("[bambu] connect")
-  mqttClient.publish(`${BAMBUBRIDGE_MQTT_PREFIX}/${BAMBUBRIDGE_PRINTER_SN}/printer_online`, "true", {retain: true});
+  mqttClient.publish(`${BAMBUBRIDGE_MQTT_PREFIX}/${BAMBUBRIDGE_PRINTER_SN}/printer_status`, "online", {retain: true});
 // don't subscribe to mqtt directly from the printer, because it might lock out BambuStudio instances.
 //  bambuClient.subscribe("device/01P00A361000034/report", (err) => {
 //    console.log("[bambu] subscribed")
@@ -218,13 +218,13 @@ function processMessage(message, devId){
           }
         }
 
-        mqttClient.publish(`${BAMBUBRIDGE_MQTT_PREFIX}/${BAMBUBRIDGE_PRINTER_SN}/studio_online`, "true", {retain: true});
+        mqttClient.publish(`${BAMBUBRIDGE_MQTT_PREFIX}/${BAMBUBRIDGE_PRINTER_SN}/studio_status`, "online", {retain: true});
         mqttClient.publish(`${BAMBUBRIDGE_MQTT_PREFIX}/${BAMBUBRIDGE_PRINTER_SN}/last_update`, new Date().toISOString(), {retain: true});
         
         // setup a timer to report the studio is offline if we don't get a message for 10s.
         clearTimeout(inactiveTimer);
         inactiveTimer = setTimeout(() => {
-          mqttClient.publish(`${BAMBUBRIDGE_MQTT_PREFIX}/${BAMBUBRIDGE_PRINTER_SN}/studio_online`, "false", {retain: true});
+          mqttClient.publish(`${BAMBUBRIDGE_MQTT_PREFIX}/${BAMBUBRIDGE_PRINTER_SN}/studio_status`, "online", {retain: true});
         }, 10000 );
       }
     }

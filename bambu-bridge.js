@@ -224,7 +224,7 @@ function processMessage(message, devId){
         // setup a timer to report the studio is offline if we don't get a message for 10s.
         clearTimeout(inactiveTimer);
         inactiveTimer = setTimeout(() => {
-          mqttClient.publish(`${BAMBUBRIDGE_MQTT_PREFIX}/${BAMBUBRIDGE_PRINTER_SN}/studio_status`, "online", {retain: true});
+          mqttClient.publish(`${BAMBUBRIDGE_MQTT_PREFIX}/${BAMBUBRIDGE_PRINTER_SN}/studio_status`, "offline", {retain: true});
         }, 10000 );
       }
     }

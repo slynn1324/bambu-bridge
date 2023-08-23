@@ -11,7 +11,7 @@ BAMBUBRIDGE_PRINTER_HOST=process.env.BAMBUBRIDGE_PRINTER_HOST;
 BAMBUBRIDGE_PRINTER_SN=process.env.BAMBUBRIDGE_PRINTER_SN;
 BAMBUBRIDGE_PRINTER_ACCESS_CODE=process.env.BAMBUBRIDGE_PRINTER_ACCESS_CODE;
 BAMBUBRIDGE_HTTP_PORT=process.env.BAMBUBRIDGE_HTTP_PORT || 3000 ;  
-BAMBUBRIDGE_VERBOSE=(process.env.BAMBUBRIGE_VERBOSE || "n").toLowerCase() == "y";
+BAMBUBRIDGE_VERBOSE=(process.env.BAMBUBRIDGE_VERBOSE || "n").toLowerCase() == "y";
 
 if ( !BAMBUBRIDGE_MQTT_HOST ){
   console.log("Environment variable BAMBUBRIDGE_MQTT_HOST is required.");
@@ -49,6 +49,9 @@ Printer:
   sn: ${BAMBUBRIDGE_PRINTER_SN}
   access code: ${BAMBUBRIDGE_PRINTER_ACCESS_CODE}
 
+Verbose: ${BAMBUBRIDGE_VERBOSE}
+
+
 
 `);
 
@@ -74,6 +77,11 @@ const COMMANDS = {
 //   return template; 
 // }
 
+
+
+// ###############################################################################################################
+// Configure MQTT connection to the Broker
+// ###############################################################################################################
 const mqttClient = mqtt.connect(`mqtt://${BAMBUBRIDGE_MQTT_HOST}:${BAMBUBRIDGE_MQTT_PORT}`,{
   clientId: BAMBUBRIDGE_MQTT_CLIENT_ID,
   username: BAMBUBRIDGE_MQTT_USERNAME,
@@ -96,7 +104,8 @@ mqttClient.on("disconnect", (err) => {
 mqttClient.on("connect", (err) => {
   console.log("[mqtt] connect");
   mqttClient.publish(`${BAMBUBRIDGE_MQTT_PREFIX}/online`, "true", { retain: true });
-  mqttClient.subscribe(`${BAMBUBRIDGE_MQTT_PREFIX}/command/${BAMBUBRIDGE_PRINTER_SN}`);
+  mqttClient.publish(`${BAMBUBRIDGE_MQTT_PREFIX}/${BAMBUBRIDGE_PRINTER_SN}/studio_online`, "false", {retain: true});
+  mqttClient.subscribe(`${BAMBUBRIDGE_MQTT_PREFIX}/${BAMBUBRIDGE_PRINTER_SN}/command`);
 });
 
 mqttClient.on("message", (topic, message) => {
@@ -104,7 +113,8 @@ mqttClient.on("message", (topic, message) => {
   console.log("[mqtt] message topic=" + topic)
   let value = message.toString();
 
-  if ( topic == `${BAMBUBRIDGE_MQTT_PREFIX}/command/${BAMBUBRIDGE_PRINTER_SN}` ){
+  // if we receive a command message, then issue the appropriate command to the printer via the bambuClient
+  if ( topic == `${BAMBUBRIDGE_MQTT_PREFIX}/${BAMBUBRIDGE_PRINTER_SN}/command` ){
     if ( value === "stop" ){
       bambuClient.publish(`device/${BAMBUBRIDGE_PRINTER_SN}/request`, JSON.stringify(COMMANDS.STOP));
     } else if ( value === "pause" ){
@@ -120,8 +130,12 @@ mqttClient.on("message", (topic, message) => {
 
 });
 
-// connect to the printer over mqtt -- so we can publish commands ot the printer.  we won't subscribe to topics because that
-// appears to block BambuStudio from connecting correctly in recent firmwares.  Printer limiting to 1 MQTT client?
+// ###############################################################################################################
+// Connect to the printer over MQTT
+// We will only use this to issue commands to the printer.  Recent firmwares seem to block simultaneous 
+// subscribers possibly impacting BambuStudio connections.  It doesn't appear to be an issue if you connect but 
+// don't subscribe.  We can also track the connected state of MQTT to reflect the printer status.
+// ###############################################################################################################
 const bambuClient = mqtt.connect(`mqtts://${BAMBUBRIDGE_PRINTER_HOST}:8883`,{
     clientId: BAMBUBRIDGE_MQTT_CLIENT_ID,
     username: "bblp",
@@ -131,19 +145,20 @@ const bambuClient = mqtt.connect(`mqtts://${BAMBUBRIDGE_PRINTER_HOST}:8883`,{
     reconnectPeriod: 10000 // 10s instead of 1s
   });
 
+// reflect bambu connection status on a broker topic
 bambuClient.on("error", (err) => {
   console.log("[bambu] error", err);
-  mqttClient.publish(`${BAMBUBRIDGE_MQTT_PREFIX}/status/${BAMBUBRIDGE_PRINTER_SN}`, "offline", {retain: true});
+  mqttClient.publish(`${BAMBUBRIDGE_MQTT_PREFIX}/${BAMBUBRIDGE_PRINTER_SN}/printer_online`, "false", {retain: true});
 });
 
 bambuClient.on("disconnect", () => {
   console.log("[bambu] disconnect");
-  mqttClient.publish(`${BAMBUBRIDGE_MQTT_PREFIX}/status/${BAMBUBRIDGE_PRINTER_SN}`, "offline", {retain: true});
+  mqttClient.publish(`${BAMBUBRIDGE_MQTT_PREFIX}/${BAMBUBRIDGE_PRINTER_SN}/printer_online`, "false", {retain: true});
 });
 
 bambuClient.on("offline", () => {
   console.log("[bambu] offline");
-  mqttClient.publish(`${BAMBUBRIDGE_MQTT_PREFIX}/status/${BAMBUBRIDGE_PRINTER_SN}`, "offline", {retain: true});
+  mqttClient.publish(`${BAMBUBRIDGE_MQTT_PREFIX}/${BAMBUBRIDGE_PRINTER_SN}/printer_online`, "false", {retain: true});
 });
 
 bambuClient.on("reconnect", () => {
@@ -152,6 +167,7 @@ bambuClient.on("reconnect", () => {
 
 bambuClient.on("connect", () => {
   console.log("[bambu] connect")
+  mqttClient.publish(`${BAMBUBRIDGE_MQTT_PREFIX}/${BAMBUBRIDGE_PRINTER_SN}/printer_online`, "true", {retain: true});
 // don't subscribe to mqtt directly from the printer, because it might lock out BambuStudio instances.
 //  bambuClient.subscribe("device/01P00A361000034/report", (err) => {
 //    console.log("[bambu] subscribed")
@@ -165,8 +181,12 @@ bambuClient.on("connect", () => {
 });
 
 
-// process a JSON message from the printer.  The same messages would come over MQTT directly from the printer or from
-// my forked feature additional fo the bambu_status_webhook in slynn1324/BambuStudio
+// ###############################################################################################################
+// Process a JSON Message
+// These are the report messages sent by the printer.  In our case, we're receiving them via webhook from 
+// a forked and patched version of BambuStudio -> slynn1324/BambuStudio
+// ###############################################################################################################
+let inactiveTimer; 
 function processMessage(message, devId){
 
   if ( devId == BAMBUBRIDGE_PRINTER_SN ){
@@ -187,21 +207,25 @@ function processMessage(message, devId){
           } 
 
           if ( typeof(value) === "string" ){
-            mqttClient.publish(`${BAMBUBRIDGE_MQTT_PREFIX}/${BAMBUBRIDGE_PRINTER_SN}/${key}`, "" + value, {retain: true});
+            mqttClient.publish(`${BAMBUBRIDGE_MQTT_PREFIX}/${BAMBUBRIDGE_PRINTER_SN}/report/${key}`, "" + value, {retain: true});
           }
         }
 
-        // extract the chamber light
+        // flatten out the entries in the lights_report
         if ( obj.print.lights_report ){
-          for ( idx in obj.print.lights_report ){
-            let item = obj.print.lights_report[idx];
-            if ( item.node == "chamber_light" ){
-              mqttClient.publish(`${BAMBUBRIDGE_MQTT_PREFIX}/${BAMBUBRIDGE_PRINTER_SN}/chamber_light`, item.mode, {retain: true});
-            }
+          for ( const item of obj.print.lights_report ){
+            mqttClient.publish(`${BAMBUBRIDGE_MQTT_PREFIX}/${BAMBUBRIDGE_PRINTER_SN}/report/light_${item.node}`, item.mode, {retain: true});
           }
         }
 
-        mqttClient.publish(`${BAMBUBRIDGE_MQTT_PREFIX}/last_update/${BAMBUBRIDGE_PRINTER_SN}`, new Date().toISOString(), {retain: true});
+        mqttClient.publish(`${BAMBUBRIDGE_MQTT_PREFIX}/${BAMBUBRIDGE_PRINTER_SN}/studio_online`, "true", {retain: true});
+        mqttClient.publish(`${BAMBUBRIDGE_MQTT_PREFIX}/${BAMBUBRIDGE_PRINTER_SN}/last_update`, new Date().toISOString(), {retain: true});
+        
+        // setup a timer to report the studio is offline if we don't get a message for 10s.
+        clearTimeout(inactiveTimer);
+        inactiveTimer = setTimeout(() => {
+          mqttClient.publish(`${BAMBUBRIDGE_MQTT_PREFIX}/${BAMBUBRIDGE_PRINTER_SN}/studio_online`, "false", {retain: true});
+        }, 10000 );
       }
     }
 
@@ -209,8 +233,13 @@ function processMessage(message, devId){
     console.log(`ignoring request for wrong SN: ${devId} != ${BAMBUBRIDGE_PRINTER_SN}`);
   }
 }
-//});
 
+
+
+// ###############################################################################################################
+// Setup an HTTP Server / Listener
+// Handle POST requests, delegating to processMessage()
+// ###############################################################################################################
 const httpServer = http.createServer((req,resp) => {
 	
 	if ( req.method == "GET" ){
@@ -250,5 +279,4 @@ const httpServer = http.createServer((req,resp) => {
 httpServer.listen(BAMBUBRIDGE_HTTP_PORT, () => {
 	console.log(`http listening on port ${BAMBUBRIDGE_HTTP_PORT}`);
 });
-
 
